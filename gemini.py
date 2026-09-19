@@ -76,36 +76,65 @@ async def ask_gemini(
         }
     }
 
+    # Список моделей по приоритету: если основная перегружена (503, 429) или недоступна, переключаемся на следующую
+    candidate_models = [
+        GEMINI_MODEL,
+        "gemini-3.6-flash",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.5-pro"
+    ]
+    models_to_try = []
+    for m in candidate_models:
+        if m and m not in models_to_try:
+            models_to_try.append(m)
+
+    last_error_code = None
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=45)) as resp:
-                if resp.status != 200:
-                    err_body = await resp.text()
-                    logger.error(f"Gemini API Error {resp.status}: {err_body}")
-                    return f"❌ Ошибка нейросети (код {resp.status}). Попробуйте еще раз через пару секунд."
+            for model_name in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
 
-                result = await resp.json()
-                candidates = result.get("candidates", [])
-                if not candidates:
-                    return "⚠️ Нейросеть не смогла сгенерировать ответ. Попробуйте сфотографировать четче."
+                for attempt in range(2):
+                    try:
+                        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=35)) as resp:
+                            if resp.status == 200:
+                                result = await resp.json()
+                                candidates = result.get("candidates", [])
+                                if not candidates:
+                                    continue
 
-                parts_response = candidates[0].get("content", {}).get("parts", [])
-                # Извлекаем текст ответа (игнорируя технические поля)
-                text_response = "".join(p.get("text", "") for p in parts_response if "text" in p)
+                                parts_response = candidates[0].get("content", {}).get("parts", [])
+                                text_response = "".join(p.get("text", "") for p in parts_response if "text" in p)
 
-                if not text_response:
-                    return "⚠️ Пустой ответ от модели. Попробуйте переформулировать."
+                                if not text_response:
+                                    continue
 
-                # Сохраняем текстовый след в историю диалога
-                # (картинки в историю не сохраняем, чтобы не перегружать токены в последующих запросах)
-                user_histories[user_id].append({"role": "user", "parts": [{"text": text_prompt}]})
-                user_histories[user_id].append({"role": "model", "parts": [{"text": text_response}]})
+                                # Сохраняем текстовый след в историю
+                                user_histories[user_id].append({"role": "user", "parts": [{"text": text_prompt}]})
+                                user_histories[user_id].append({"role": "model", "parts": [{"text": text_response}]})
 
-                # Ограничиваем размер истории
-                if len(user_histories[user_id]) > MAX_HISTORY_LEN * 2:
-                    user_histories[user_id] = user_histories[user_id][-MAX_HISTORY_LEN * 2:]
+                                if len(user_histories[user_id]) > MAX_HISTORY_LEN * 2:
+                                    user_histories[user_id] = user_histories[user_id][-MAX_HISTORY_LEN * 2:]
 
-                return text_response
+                                return text_response
+
+                            last_error_code = resp.status
+                            if resp.status in (500, 503, 429):
+                                logger.warning(f"Модель {model_name} вернула код {resp.status} (перегрузка), попытка {attempt + 1}")
+                                await asyncio.sleep(1)
+                            else:
+                                err_body = await resp.text()
+                                logger.error(f"Gemini API {model_name} Error {resp.status}: {err_body}")
+                                break
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Таймаут запроса к {model_name}, пробуем следующую модель...")
+                        break
+
+            return f"❌ Серверы нейросети временно перегружены (код {last_error_code or 503}). Повторите запрос через 5 секунд."
 
     except aiohttp.ClientConnectorError as cce:
         logger.error(f"Ошибка подключения к Gemini: {cce}")

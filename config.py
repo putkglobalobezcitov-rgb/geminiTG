@@ -13,5 +13,5 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY не задан в .env!")
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
 PORT = int(os.getenv("PORT", "8080"))
