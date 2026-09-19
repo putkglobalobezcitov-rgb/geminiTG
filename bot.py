@@ -10,7 +10,12 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram.types import (
+    BotCommand,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from config import BOT_TOKEN, PORT
 from gemini import ask_gemini, clear_user_history, get_user_mode, set_user_mode
@@ -30,6 +35,20 @@ logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
 dp = Dispatcher()
+
+# Удобная клавиатура для телефона
+KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [
+            KeyboardButton(text="/a Решить задачу"),
+            KeyboardButton(text="/b Тест и пересказ"),
+        ],
+        [
+            KeyboardButton(text="/new Очистить"),
+        ]
+    ],
+    resize_keyboard=True
+)
 
 
 # Веб-сервер для бесплатного тарифа Render Web Service
@@ -63,45 +82,74 @@ async def send_smart_message(message: Message, text: str):
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     welcome_text = (
-        "Привет. Я помогу с учебой и подготовкой к контрольным.\n\n"
-        "• Обычный режим (по умолчанию): отправь фото задания или напиши вопрос — я сразу решу и объясню.\n"
-        "• Режим подготовки (/quiz или /history): отправь тему или фото учебника — сделаю краткий пересказ сути и дам тест для самопроверки.\n"
-        "• /new — сбросить контекст и вернуться к обычному решению."
+        "Привет. Выбирай нужный режим кнопками внизу или командами:\n\n"
+        "• /a — Решить задачу (скинь фото или текст — дам четкий ответ и решение)\n"
+        "• /b — Тест и пересказ (скинь фото учебника или тему — сделаю пересказ и тест для самопроверки)\n"
+        "• /new — Сбросить диалог"
     )
-    await message.answer(welcome_text, parse_mode=None)
+    await message.answer(welcome_text, parse_mode=None, reply_markup=KEYBOARD)
 
 
+# Режим подготовки (пересказ + тест): команды /b, /quiz, /history, /test, /prep или нажатие кнопки
+@dp.message(Command("b"))
 @dp.message(Command("quiz"))
 @dp.message(Command("history"))
 @dp.message(Command("test"))
 @dp.message(Command("prep"))
+@dp.message(F.text.startswith("/b"))
+@dp.message(F.text == "/b Тест и пересказ")
 async def cmd_quiz(message: Message):
     set_user_mode(message.from_user.id, "quiz")
     
-    # Проверяем, передал ли пользователь тему прямо в команде (например: /history Северная война)
-    args = message.text.split(maxsplit=1)
-    if len(args) > 1 and args[1].strip():
-        topic = args[1].strip()
+    # Извлекаем тему, если пользователь ввел сразу с текстом (например: /b Северная война)
+    raw_text = message.text or ""
+    parts = raw_text.split(maxsplit=1)
+    
+    if len(parts) > 1 and parts[1].strip() and not parts[1].startswith("Тест и пересказ"):
+        topic = parts[1].strip()
         await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
         response = await ask_gemini(user_id=message.from_user.id, prompt=topic, mode="quiz")
         await send_smart_message(message, response)
     else:
         text = (
-            "Включен режим подготовки к проверочной.\n"
-            "Отправь фото страницы учебника/конспекта или напиши тему текстом.\n"
-            "Я сделаю краткий пересказ сути и составлю тест для самопроверки.\n"
-            "Чтобы вернуться к обычному решению задач, напиши /new"
+            "Включен режим: ТЕСТ И ПЕРЕСКАЗ (/b).\n"
+            "Отправь фото параграфа/конспекта или напиши тему.\n"
+            "Я сделаю краткий пересказ сути и составлю тест для самопроверки.\n\n"
+            "Чтобы вернуться к обычному решению, нажми /a или /new"
         )
-        await message.answer(text, parse_mode=None)
+        await message.answer(text, parse_mode=None, reply_markup=KEYBOARD)
 
 
+# Обычный режим решения задач: команды /a, /solve или нажатие кнопки
+@dp.message(Command("a"))
+@dp.message(Command("solve"))
+@dp.message(F.text.startswith("/a"))
+@dp.message(F.text == "/a Решить задачу")
+async def cmd_solve(message: Message):
+    set_user_mode(message.from_user.id, "solve")
+    
+    raw_text = message.text or ""
+    parts = raw_text.split(maxsplit=1)
+    
+    if len(parts) > 1 and parts[1].strip() and not parts[1].startswith("Решить задачу"):
+        question = parts[1].strip()
+        await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+        response = await ask_gemini(user_id=message.from_user.id, prompt=question, mode="solve")
+        await send_smart_message(message, response)
+    else:
+        await message.answer("Включен режим: РЕШЕНИЕ ЗАДАЧ (/a). Отправь фото или напиши вопрос.", parse_mode=None, reply_markup=KEYBOARD)
+
+
+# Сброс контекста: команды /new, /clear, /c или нажатие кнопки
 @dp.message(Command("new"))
 @dp.message(Command("clear"))
-@dp.message(Command("solve"))
+@dp.message(Command("c"))
+@dp.message(F.text.startswith("/new"))
+@dp.message(F.text == "/new Очистить")
 async def cmd_clear(message: Message):
     set_user_mode(message.from_user.id, "solve")
     clear_user_history(message.from_user.id)
-    await message.answer("Диалог очищен. Включен обычный режим решения. Отправь фото или вопрос.", parse_mode=None)
+    await message.answer("Диалог очищен. Включен обычный режим (/a). Отправь фото или вопрос.", parse_mode=None, reply_markup=KEYBOARD)
 
 
 @dp.message(F.photo)
@@ -117,7 +165,6 @@ async def handle_photo(message: Message):
     await bot.download(photo, destination=file_io)
     image_bytes = file_io.getvalue()
     
-    # Подпись к фото (если пользователь что-то написал к фотке)
     prompt = message.caption
 
     # Запрашиваем ответ у Gemini
@@ -149,7 +196,7 @@ async def handle_document(message: Message):
         )
         await send_smart_message(message, response)
     else:
-        await message.answer("⚠️ Пожалуйста, отправьте изображение (JPEG, PNG).")
+        await message.answer("Пожалуйста, отправь изображение (JPEG, PNG).")
 
 
 @dp.message(F.text)
@@ -170,7 +217,14 @@ async def main():
     try:
         me = await bot.get_me()
         logger.info(f"Бот успешно авторизован: @{me.username} ({me.first_name})")
-        print(f"\n>>> Бот @{me.username} ГОТОВ К РАБОТЕ! <<<")
+        print(f"\n>>> БОТ @{me.username} ГОТОВ К РАБОТЕ! <<<\n")
+        
+        # Регистрируем системные команды Telegram для всплывающего меню на телефоне
+        await bot.set_my_commands([
+            BotCommand(command="a", description="Решить задачу / домашку"),
+            BotCommand(command="b", description="Тест и краткий пересказ темы"),
+            BotCommand(command="new", description="Очистить диалог"),
+        ])
         
         # Запускаем веб-сервер для Render
         await start_health_server()
