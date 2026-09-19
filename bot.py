@@ -152,30 +152,52 @@ async def cmd_clear(message: Message):
     await message.answer("Диалог очищен. Включен обычный режим (/a). Отправь фото или вопрос.", parse_mode=None, reply_markup=KEYBOARD)
 
 
+# Буфер для объединения пачек фото (альбомов) в один запрос
+album_buffers: dict = {}
+
+
+async def process_album(buffer_key: str, message: Message, user_id: int):
+    """Ждет завершения отправки всех фото из альбома и отправляет их в Gemini одним запросом."""
+    await asyncio.sleep(1.2)
+    if buffer_key not in album_buffers:
+        return
+    data = album_buffers.pop(buffer_key)
+    images = data.get("images", [])
+    prompt = data.get("prompt")
+    
+    if not images:
+        return
+
+    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    response = await ask_gemini(
+        user_id=user_id,
+        prompt=prompt,
+        images=images
+    )
+    await send_smart_message(message, response)
+
+
 @dp.message(F.photo)
 async def handle_photo(message: Message):
-    """Обработчик фотографий (задач, тестов, конспектов)."""
-    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-    
-    # Берем фото максимального разрешения
+    """Обработчик фотографий с автоматическим объединением пачек/альбомов."""
     photo = message.photo[-1]
-    
-    # Скачиваем фото в память
     file_io = io.BytesIO()
     await bot.download(photo, destination=file_io)
     image_bytes = file_io.getvalue()
-    
-    prompt = message.caption
 
-    # Запрашиваем ответ у Gemini
-    response = await ask_gemini(
-        user_id=message.from_user.id,
-        prompt=prompt,
-        image_bytes=image_bytes,
-        image_mime="image/jpeg"
-    )
+    # Ключ группировки: ID альбома Telegram или временный ID пользователя
+    buffer_key = message.media_group_id or f"user_{message.from_user.id}"
 
-    await send_smart_message(message, response)
+    if buffer_key in album_buffers:
+        album_buffers[buffer_key]["images"].append((image_bytes, "image/jpeg"))
+        if message.caption and not album_buffers[buffer_key].get("prompt"):
+            album_buffers[buffer_key]["prompt"] = message.caption
+    else:
+        album_buffers[buffer_key] = {
+            "images": [(image_bytes, "image/jpeg")],
+            "prompt": message.caption,
+        }
+        asyncio.create_task(process_album(buffer_key, message, message.from_user.id))
 
 
 @dp.message(F.document)
