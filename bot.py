@@ -63,21 +63,17 @@ async def send_smart_message(message: Message, text: str):
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     welcome_text = (
-        "👋 *Привет! Я твой карманный помощник для учебы на базе Google Gemini 3.8 Flash.*\n\n"
-        "🎯 *Что я умею:*\n"
-        "• 📸 *Фото заданий:* сфоткай задачу, тест, конспект или доску — я мгновенно решу и объясню шаг за шагом.\n"
-        "• ✍️ *Текстовые вопросы:* задавай любые вопросы по алгебре, физике, химии, истории, языкам и другим предметам.\n"
-        "• 🧠 *Память:* я помню наш разговор, можно задавать уточняющие вопросы («объясни пункт 2», «а если изменить данные?»).\n\n"
-        "🔄 Напиши /new в любой момент, чтобы сбросить тему и начать с чистого листа."
+        "Привет. Отправь мне фото задания или напиши вопрос текстом — я решу и объясню.\n"
+        "Чтобы сбросить тему диалога, напиши /new"
     )
-    await message.answer(welcome_text, parse_mode=ParseMode.MARKDOWN)
+    await message.answer(welcome_text, parse_mode=None)
 
 
 @dp.message(Command("new"))
 @dp.message(Command("clear"))
 async def cmd_clear(message: Message):
     clear_user_history(message.from_user.id)
-    await message.answer("🔄 *Контекст диалога очищен!* О чем спросишь теперь?", parse_mode=ParseMode.MARKDOWN)
+    await message.answer("Диалог очищен. Что нужно решить?", parse_mode=None)
 
 
 @dp.message(F.photo)
