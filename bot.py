@@ -13,7 +13,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
 from config import BOT_TOKEN, PORT
-from gemini import ask_gemini, clear_user_history
+from gemini import ask_gemini, clear_user_history, get_user_mode, set_user_mode
 
 # Настройка UTF-8 для Windows
 if sys.platform == "win32":
@@ -63,17 +63,45 @@ async def send_smart_message(message: Message, text: str):
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     welcome_text = (
-        "Привет. Отправь мне фото задания или напиши вопрос текстом — я решу и объясню.\n"
-        "Чтобы сбросить тему диалога, напиши /new"
+        "Привет. Я помогу с учебой и подготовкой к контрольным.\n\n"
+        "• Обычный режим (по умолчанию): отправь фото задания или напиши вопрос — я сразу решу и объясню.\n"
+        "• Режим подготовки (/quiz или /history): отправь тему или фото учебника — сделаю краткий пересказ сути и дам тест для самопроверки.\n"
+        "• /new — сбросить контекст и вернуться к обычному решению."
     )
     await message.answer(welcome_text, parse_mode=None)
 
 
+@dp.message(Command("quiz"))
+@dp.message(Command("history"))
+@dp.message(Command("test"))
+@dp.message(Command("prep"))
+async def cmd_quiz(message: Message):
+    set_user_mode(message.from_user.id, "quiz")
+    
+    # Проверяем, передал ли пользователь тему прямо в команде (например: /history Северная война)
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1 and args[1].strip():
+        topic = args[1].strip()
+        await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+        response = await ask_gemini(user_id=message.from_user.id, prompt=topic, mode="quiz")
+        await send_smart_message(message, response)
+    else:
+        text = (
+            "Включен режим подготовки к проверочной.\n"
+            "Отправь фото страницы учебника/конспекта или напиши тему текстом.\n"
+            "Я сделаю краткий пересказ сути и составлю тест для самопроверки.\n"
+            "Чтобы вернуться к обычному решению задач, напиши /new"
+        )
+        await message.answer(text, parse_mode=None)
+
+
 @dp.message(Command("new"))
 @dp.message(Command("clear"))
+@dp.message(Command("solve"))
 async def cmd_clear(message: Message):
+    set_user_mode(message.from_user.id, "solve")
     clear_user_history(message.from_user.id)
-    await message.answer("Диалог очищен. Что нужно решить?", parse_mode=None)
+    await message.answer("Диалог очищен. Включен обычный режим решения. Отправь фото или вопрос.", parse_mode=None)
 
 
 @dp.message(F.photo)
